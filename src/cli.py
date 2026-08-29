@@ -9,10 +9,14 @@ from typing import Any
 import typer
 
 from agent.adapter import FakeModel, LlmAdapter
+from experiments.proposal_store import ProposalStore
 from experiments.runner import ModelFactory, run_tasks
 from knowledge.miner import merge as merge_evidence
 from knowledge.miner import mine as mine_evidence
+from knowledge.miner import summarize_trace
 from knowledge.store import KnowledgeStore
+from skills.loader import get_skill_version, load_skill
+from skills.proposer import propose as propose_patch
 from traces.schema import load_scenarios
 from traces.store import TraceStore
 
@@ -81,25 +85,69 @@ def run(
 
 
 @app.command()
-def inspect(run_id: str) -> None:
-    """Print a compact summary of one run."""
-    store = TraceStore()
-    try:
-        trace = store.get(run_id)
-    except FileNotFoundError:
-        typer.echo(f"run not found: {run_id}", err=True)
-        raise typer.Exit(1) from None
-    typer.echo(f"run_id: {trace.run_id}")
-    typer.echo(f"task: {trace.task_id}")
-    typer.echo(f"model: {trace.model}")
-    typer.echo(f"success: {trace.outcome.success}")
-    typer.echo(f"errors: {trace.outcome.errors}")
-    typer.echo(f"violated_constraints: {trace.outcome.violated_constraints}")
-    typer.echo(f"tool_calls: {trace.metrics.tool_calls}")
-    typer.echo(f"tokens: in={trace.metrics.tokens_in} out={trace.metrics.tokens_out}")
-    typer.echo(f"cost_usd: {trace.metrics.estimated_cost_usd:.6f}")
-    if trace.final_answer is not None:
-        typer.echo(f"final_answer: {trace.final_answer}")
+def inspect(artifact: str) -> None:
+    """Print one run (run_<id>), knowledge record (<pattern-id>), or candidate (candidate-<id>)."""
+    if artifact.startswith("candidate-"):
+        _inspect_candidate(artifact)
+    elif artifact.startswith("run_"):
+        _inspect_run(artifact)
+    else:
+        _inspect_pattern(artifact)
+
+
+@app.command()
+def propose(
+    workflow: str = typer.Argument("onboarding", help="skill workflow directory"),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        help="model name (default: fake unless EXP_LLM_API_KEY is set)",
+    ),
+    traces: int = typer.Option(
+        20, "--traces", help="max recent runs to summarize for the proposer"
+    ),
+) -> None:
+    """Propose ONE minimal skill patch; write candidates under results/candidates/.
+
+    The proposer NEVER mutates skills/<workflow>/ directly — candidate
+    artifacts land in results/candidates/<id>/ and promotion (M4) is the only
+    path that changes deployed skills.
+    """
+    skill_md = load_skill(workflow)
+    knowledge = KnowledgeStore()
+    records = [record for record in knowledge.all_records() if record.status == "active"]
+    history = ProposalStore().load_history()
+    run_summaries = _recent_run_summaries(traces)
+
+    model_name = _resolve_model_name(model)
+    result = propose_patch(
+        skill_md=skill_md,
+        records=records,
+        history=history,
+        run_summaries=run_summaries,
+        model=_proposer_model_factory(model_name)(),
+    )
+
+    if result.proposal is None:
+        typer.echo(f"no patch proposed (parse_failures={result.parse_failures})")
+        return
+
+    store = ProposalStore()
+    candidate_id = store.next_candidate_id()
+    from_version = get_skill_version(workflow)
+    store.save_candidate(
+        candidate_id=candidate_id,
+        proposal=result.proposal,
+        workflow=workflow,
+        from_version=from_version,
+        to_version=_bump_version(from_version),
+        proposed_model=model_name,
+    )
+    patch_lines = len([line for line in result.proposal.patch.splitlines() if line.strip()])
+    typer.echo(f"candidate: {candidate_id}")
+    typer.echo(f"patch_lines: {patch_lines}")
+    typer.echo(f"cited_records: {', '.join(result.proposal.cited_records)}")
+    typer.echo(f"cost_usd: {result.cost_usd:.6f}")
 
 
 @app.command()
@@ -148,6 +196,87 @@ def patterns() -> None:
             f"{record.id} {record.status} support={record.statistics.support} "
             f"confidence={record.confidence:.2f}"
         )
+
+
+def _inspect_run(run_id: str) -> None:
+    """Print a compact summary of one run."""
+    store = TraceStore()
+    try:
+        trace = store.get(run_id)
+    except FileNotFoundError:
+        typer.echo(f"run not found: {run_id}", err=True)
+        raise typer.Exit(1) from None
+    typer.echo(f"run_id: {trace.run_id}")
+    typer.echo(f"task: {trace.task_id}")
+    typer.echo(f"model: {trace.model}")
+    typer.echo(f"success: {trace.outcome.success}")
+    typer.echo(f"errors: {trace.outcome.errors}")
+    typer.echo(f"violated_constraints: {trace.outcome.violated_constraints}")
+    typer.echo(f"tool_calls: {trace.metrics.tool_calls}")
+    typer.echo(f"tokens: in={trace.metrics.tokens_in} out={trace.metrics.tokens_out}")
+    typer.echo(f"cost_usd: {trace.metrics.estimated_cost_usd:.6f}")
+    if trace.final_answer is not None:
+        typer.echo(f"final_answer: {trace.final_answer}")
+
+
+def _inspect_candidate(candidate_id: str) -> None:
+    """Print a candidate's patch, reasoning, evidence refs and evaluation state."""
+    store = ProposalStore()
+    try:
+        candidate = store.load_candidate(candidate_id)
+    except FileNotFoundError:
+        typer.echo(f"candidate not found: {candidate_id}", err=True)
+        raise typer.Exit(1) from None
+    record = candidate["record"]
+    typer.echo(f"candidate_id: {candidate_id}")
+    typer.echo(f"skill: {record.get('skill')}")
+    typer.echo(f"from_version: {record.get('from_version')}")
+    typer.echo(f"to_version: {record.get('to_version')}")
+    typer.echo(f"evidence_refs: {record.get('evidence_refs')}")
+    typer.echo(f"evaluation: {record.get('evaluation')}")
+    typer.echo(f"decision: {record.get('decision')}")
+    typer.echo("reasoning:")
+    for line in str(candidate["reasoning"]).splitlines():
+        typer.echo(f"  {line}")
+    typer.echo("patch:")
+    for line in str(candidate["patch"]).splitlines():
+        typer.echo(f"  {line}")
+
+
+def _inspect_pattern(pattern_id: str) -> None:
+    """Print one knowledge record."""
+    store = KnowledgeStore()
+    try:
+        record = store.get(pattern_id)
+    except (FileNotFoundError, ValueError):
+        typer.echo(f"record not found: {pattern_id}", err=True)
+        raise typer.Exit(1) from None
+    typer.echo(f"id: {record.id}")
+    typer.echo(f"claim: {record.claim.text}")
+    typer.echo(f"type: {record.claim.type.value}")
+    typer.echo(f"status: {record.status}")
+    typer.echo(f"support: {record.statistics.support}")
+    typer.echo(f"failures: {record.statistics.failures}")
+    typer.echo(f"confidence: {record.confidence:.2f}")
+    typer.echo(f"supporting_runs: {record.evidence.supporting_runs}")
+    typer.echo(f"counterexamples: {record.evidence.counterexamples}")
+
+
+def _recent_run_summaries(limit: int) -> list[dict]:
+    """Most recent run summaries in knowledge.miner.summarize_trace shape."""
+    if limit <= 0:
+        return []
+    store = TraceStore()
+    rows = store.list_runs()  # ordered by run_id, so the last rows are newest
+    return [summarize_trace(store.get(row["run_id"])) for row in rows[-limit:]]
+
+
+def _bump_version(version: str) -> str:
+    """Candidate to_version: current version + 1 (best-effort)."""
+    try:
+        return str(int(version) + 1)
+    except (TypeError, ValueError):
+        return version
 
 
 def _resolve_model_name(override: str | None) -> str:
@@ -210,6 +339,47 @@ def _miner_model_factory(model_name: str) -> Callable[[], LlmAdapter | FakeModel
             response = {"role": "assistant", "content": json.dumps(_MINER_FAKE_CANDIDATES)}
             # Two copies so the JSON-repair retry also succeeds under the fake.
             scripts = [(response, dict(_MINER_FAKE_USAGE)) for _ in range(2)]
+            return FakeModel(scripts=scripts, model=model_name, temperature=0.0)
+
+        return factory
+
+    base_url = os.environ.get("EXP_LLM_BASE_URL")
+    api_key = os.environ.get("EXP_LLM_API_KEY")
+    if not base_url or not api_key:
+        raise RuntimeError(
+            "EXP_LLM_BASE_URL and EXP_LLM_API_KEY must be set to run a real model"
+        )
+
+    def factory() -> LlmAdapter:
+        return LlmAdapter(base_url=base_url, api_key=api_key, model=model_name, temperature=0.0)
+
+    return factory
+
+
+# Scripted proposal served by the fake proposer (deterministic dev path): a
+# one-line Procedure change citing the active employee-lookup record, which
+# applies cleanly to the current onboarding skill.
+_PROPOSER_FAKE_RESPONSE: dict[str, str] = {
+    "reasoning": (
+        "The active knowledge record look-up-the-employee-record-before-granting-access "
+        "supports verifying identity before granting access; assign hardware only when "
+        "inventory confirms availability."
+    ),
+    "patch": "@@ Procedure\n"
+    "- 4. Assign available hardware.\n"
+    "+ 4. Assign hardware only if inventory confirms availability.\n",
+}
+_PROPOSER_FAKE_USAGE: dict[str, int] = {"input_tokens": 120, "output_tokens": 64}
+
+
+def _proposer_model_factory(model_name: str) -> Callable[[], LlmAdapter | FakeModel]:
+    """Factory building a fresh model per propose() call (fake or live adapter)."""
+    if model_name == "fake" or not os.environ.get("EXP_LLM_API_KEY"):
+
+        def factory() -> FakeModel:
+            response = {"role": "assistant", "content": json.dumps(_PROPOSER_FAKE_RESPONSE)}
+            # Two copies so the JSON-repair retry also succeeds under the fake.
+            scripts = [(response, dict(_PROPOSER_FAKE_USAGE)) for _ in range(2)]
             return FakeModel(scripts=scripts, model=model_name, temperature=0.0)
 
         return factory
