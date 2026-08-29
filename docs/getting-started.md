@@ -1,0 +1,33 @@
+# Getting Started
+
+## Install
+
+```bash
+git clone https://github.com/rmax-ai/experience-compiler-lab.git
+cd experience-compiler-lab
+uv sync
+exp version
+```
+
+## A full evolution pass (after M4)
+
+```bash
+exp run train                      # 1. execute dev tasks → experience/runs/
+exp mine                           # 2. extract evidence → knowledge/
+exp propose onboarding             # 3. candidate patch + provenance
+exp eval candidate-17              # 4. candidate vs baseline on validation
+exp promote candidate-17           # 5. policy decision → history
+exp evolve --iterations 10         # 1–5 repeated
+exp compare                        # M5: four baseline configurations
+exp report --iteration 10          # Markdown iteration report
+```
+
+## Reading the results
+
+1. `results/proposals/` — every candidate with its decision, forever.
+2. `results/reports/` — per-iteration Markdown (SPEC.md §17 shape).
+3. `knowledge/index.yaml` — evidence inventory with run links.
+4. `experience/runs/<run_id>.jsonl` — the raw trace; `exp inspect run-183`.
+
+The provenance chain to verify in any report:
+**failure → evidence → hypothesis → patch → evaluation → decision**.

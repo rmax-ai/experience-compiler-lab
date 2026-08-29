@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Leak hygiene: block commits carrying real machine-state values
+# (Telegram IDs, API keys, bot tokens, PEM blocks).
+# Adapted from the cron-analytics hook. NOTE: this file excludes itself from
+# the scan, otherwise its own pattern literals block every commit.
+set -u
+
+files=$(git diff --cached --name-only --diff-filter=ACM -- . ':(exclude).githooks/**')
+if [ -z "$files" ]; then
+    exit 0
+fi
+
+hits=$(grep -nE 'telegram:-100[0-9]{6,}|\b8592523493\b|\b1003266938099\b|fk-[A-Za-z0-9]{8,}|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|[0-9]{6,10}:[A-Za-z0-9_-]{30,}|BEGIN (RSA|EC|OPENSSH|PRIVATE) KEY' $files 2>/dev/null || true)
+
+if [ -n "$hits" ]; then
+    echo "BLOCKED: possible secret or real-ID leak in staged files:" >&2
+    echo "$hits" >&2
+    exit 1
+fi
+exit 0
