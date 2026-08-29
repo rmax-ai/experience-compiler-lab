@@ -9,3 +9,7 @@ build/
 dist/
 **/uv.lock
 .DS_Store
+# runtime artifacts — real experiment runs are committed selectively via
+# results/ manifests; dev runs with FakeModel never enter git history
+experience/runs/*.jsonl
+experience/index.db

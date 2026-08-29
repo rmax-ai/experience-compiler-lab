@@ -58,3 +58,9 @@ Accept = candidate beats baseline on success rate AND regressions ≤ allowed
 (default 0 on the validation set). Score vector (tool calls, tokens, latency,
 recovery rate) is recorded per candidate from day one, but never collapsed
 into one number for decisions before M5 analysis.
+
+## D-12 — experience/runs/ is gitignored at runtime
+`experience/runs/*.jsonl` + `experience/index.db` are runtime artifacts —
+dev runs with FakeModel must not pollute the research record. Real experiment
+runs (M5+) are committed selectively through `results/` manifests; the git
+short-hash in a manifest pins the environment, not the raw runs.
