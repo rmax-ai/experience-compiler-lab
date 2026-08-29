@@ -112,7 +112,7 @@ derived_from: [inventory-check-before-assignment, incomplete-access-before-close
 proposed_by: {model: claude-x}
 evaluation: {previous_score: 0.71, candidate_score: 0.79}
 status: accepted           # accepted | rejected
-version: 1
+format_version: 1
 ```
 
 Every skill change is a patch (diff format below) applied to SKILL.md with a
