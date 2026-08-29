@@ -71,6 +71,8 @@ def test_cli_propose_writes_candidate_and_never_touches_skill(
     monkeypatch.setattr(cli, "_proposer_model_factory", lambda model_name: _proposer_factory)
 
     skill_before = SKILL_PATH.read_bytes()
+    real_candidates = REPO_ROOT / "results" / "candidates"
+    real_before = set(real_candidates.glob("candidate-*")) if real_candidates.exists() else set()
 
     result = runner.invoke(
         cli.app, ["propose", "onboarding", "--model", "fake", "--traces", "0"]
@@ -96,8 +98,9 @@ def test_cli_propose_writes_candidate_and_never_touches_skill(
 
     # Core isolation guarantee: the deployed skill is byte-for-byte unchanged.
     assert SKILL_PATH.read_bytes() == skill_before
-    # And nothing was written under the real results/ dir.
-    assert not (REPO_ROOT / "results" / "candidates" / "candidate-01").exists()
+    # And no NEW candidate dir appeared under the real repo results/ dir
+    # (snapshot taken before the invoke: pre-existing artifacts are fine).
+    assert set(real_candidates.glob("candidate-*")) == real_before
 
 
 def test_cli_propose_no_patch_writes_nothing(tmp_path: Path, monkeypatch) -> None:
