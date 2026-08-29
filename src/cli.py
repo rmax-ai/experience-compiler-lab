@@ -1,12 +1,18 @@
 """experience-compiler-lab CLI (thin dispatch layer; commands live in subpackages)."""
 
+import json
 import os
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import typer
 
 from agent.adapter import FakeModel, LlmAdapter
 from experiments.runner import ModelFactory, run_tasks
+from knowledge.miner import merge as merge_evidence
+from knowledge.miner import mine as mine_evidence
+from knowledge.store import KnowledgeStore
 from traces.schema import load_scenarios
 from traces.store import TraceStore
 
@@ -96,6 +102,54 @@ def inspect(run_id: str) -> None:
         typer.echo(f"final_answer: {trace.final_answer}")
 
 
+@app.command()
+def mine(
+    since_run: str | None = typer.Option(
+        None, "--since-run", help="only mine runs with run_id >= this (default: all)"
+    ),
+    limit: int | None = typer.Option(
+        None, "--limit", help="max runs to mine (default: all)"
+    ),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        help="model name (default: fake unless EXP_LLM_API_KEY is set)",
+    ),
+) -> None:
+    """Mine traces into knowledge records under knowledge/patterns/."""
+    store = TraceStore()
+    rows = store.list_runs()
+    if since_run is not None:
+        rows = [row for row in rows if row["run_id"] >= since_run]
+    if limit is not None:
+        rows = rows[:limit]
+    traces = [store.get(row["run_id"]) for row in rows]
+
+    model_name = _resolve_model_name(model)
+    result = mine_evidence(traces, _miner_model_factory(model_name)())
+    records = merge_evidence(result.candidates, traces)
+
+    knowledge = KnowledgeStore()
+    for record in records:
+        upserted = knowledge.upsert(record)
+        typer.echo(
+            f"upserted {upserted.id} support={upserted.statistics.support} "
+            f"failures={upserted.statistics.failures} confidence={upserted.confidence:.2f}"
+        )
+    knowledge.regenerate_index()
+    typer.echo(f"records: {len(records)}")
+
+
+@app.command()
+def patterns() -> None:
+    """List knowledge records."""
+    for record in KnowledgeStore().all_records():
+        typer.echo(
+            f"{record.id} {record.status} support={record.statistics.support} "
+            f"confidence={record.confidence:.2f}"
+        )
+
+
 def _resolve_model_name(override: str | None) -> str:
     """Default model: fake when no API key, otherwise EXP_LLM_MODEL."""
     if override is not None:
@@ -111,6 +165,52 @@ def _model_factory(model_name: str) -> ModelFactory:
 
         def factory() -> FakeModel:
             return FakeModel(scripts=DEV_SCRIPTS, model=model_name, temperature=0.0)
+
+        return factory
+
+    base_url = os.environ.get("EXP_LLM_BASE_URL")
+    api_key = os.environ.get("EXP_LLM_API_KEY")
+    if not base_url or not api_key:
+        raise RuntimeError(
+            "EXP_LLM_BASE_URL and EXP_LLM_API_KEY must be set to run a real model"
+        )
+
+    def factory() -> LlmAdapter:
+        return LlmAdapter(base_url=base_url, api_key=api_key, model=model_name, temperature=0.0)
+
+    return factory
+
+
+# Scripted candidates served by the fake miner (deterministic dev path): one
+# failure-mode hypothesis keyed to inventory errors and one success-strategy
+# hypothesis keyed to the employee lookup before granting access.
+_MINER_FAKE_CANDIDATES: list[dict[str, Any]] = [
+    {
+        "kind": "repeated_failure_mode",
+        "hypothesis": "Check available inventory before assigning hardware",
+        "mentioned_tools": ["assign_device"],
+        "mentioned_errors": ["inventory error"],
+    },
+    {
+        "kind": "repeated_success_strategy",
+        "hypothesis": "Look up the employee record before granting access",
+        "mentioned_tools": ["get_employee", "grant_access"],
+        "mentioned_errors": [],
+    },
+]
+
+_MINER_FAKE_USAGE: dict[str, int] = {"input_tokens": 96, "output_tokens": 64}
+
+
+def _miner_model_factory(model_name: str) -> Callable[[], LlmAdapter | FakeModel]:
+    """Factory building a fresh model per mine() call (fake or live adapter)."""
+    if model_name == "fake" or not os.environ.get("EXP_LLM_API_KEY"):
+
+        def factory() -> FakeModel:
+            response = {"role": "assistant", "content": json.dumps(_MINER_FAKE_CANDIDATES)}
+            # Two copies so the JSON-repair retry also succeeds under the fake.
+            scripts = [(response, dict(_MINER_FAKE_USAGE)) for _ in range(2)]
+            return FakeModel(scripts=scripts, model=model_name, temperature=0.0)
 
         return factory
 
