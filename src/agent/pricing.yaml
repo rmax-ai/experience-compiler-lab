@@ -1,0 +1,10 @@
+# Example per-1M-token prices (USD) for the LLM adapter cost estimate.
+# These are plausible public example values, NOT machine state — the adapter
+# only multiplies reported usage by these constants. Unknown models fall back
+# to `default`.
+default:
+  input: 0.30
+  output: 1.20
+deepseek-v4-flash:
+  input: 0.14
+  output: 0.28
