@@ -64,3 +64,25 @@ into one number for decisions before M5 analysis.
 dev runs with FakeModel must not pollute the research record. Real experiment
 runs (M5+) are committed selectively through `results/` manifests; the git
 short-hash in a manifest pins the environment, not the raw runs.
+
+## D-13 — M6 matrix CLI: `--models` list instead of SPEC §16 globs
+**Chosen:** `exp matrix --models A,B [--iterations N] [--seed INT]`. SPEC §16
+sketched `--skill-source '*' --executor-model '*'`. The research question is
+square-matrix transfer: every training model also executes. One comma-list
+flag keeps the CLI consistent with `compare`/`evolve`; the asymmetric glob
+form can be added if a later experiment needs it.
+
+## D-14 — H3 guard scoped to the execution path
+The source-grep H3 test originally scanned all of `src/experiments/` for
+`knowledge` imports. The learning-time evolution loop (§11) legitimately
+drives the miner/proposer — the only components allowed to see the knowledge
+base (AGENTS.md §3). Guard now covers `src/agent/` plus the runtime
+orchestration modules (runner, proposal_store, promote, report);
+`evolution.py` and `matrix.py` are exempt. Execution-agent isolation is
+unchanged.
+
+## D-15 — runner extension: `persist=False` + `memory_notes`
+`run_tasks` gained two keyword arguments (both default to prior behavior):
+`persist` (skip TraceStore append for held-out/matrix runs that must not
+pollute the evidence store) and `memory_notes` (inject the M5 memory-config
+notes via build_context). Compare and matrix rely on both.

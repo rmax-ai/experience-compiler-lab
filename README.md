@@ -33,16 +33,23 @@ PoC under active development. See ROADMAP.md and the GitHub board.
 
 ```bash
 uv sync
+source .venv/bin/activate  # puts `exp` on PATH
+
 exp version
-exp run train            # execute dev tasks against the active skill
-exp mine                 # extract evidence into knowledge/
-exp propose onboarding   # generate a candidate patch
-exp eval candidate-17    # evaluate candidate vs baseline on validation set
-exp promote candidate-17 # apply promotion policy
+exp run train              # execute dev tasks against the active skill
+exp mine                   # extract evidence into knowledge/
+exp propose onboarding     # generate a candidate patch (first id: candidate-01)
+exp eval candidate-01      # evaluate candidate vs baseline on validation set
+exp promote candidate-01   # apply promotion policy
 exp evolve --iterations 10
-exp compare              # baseline configurations (M5)
-exp inspect run-183      # inspect a single run
+exp compare                # baseline configurations (M5)
+exp matrix --models fake   # cross-model transfer matrix (M6)
+exp inspect run_001        # inspect a single run
+exp report                 # latest iteration report
 ```
+
+Without `EXP_LLM_API_KEY` set, every command runs deterministically against
+the scripted fake model (no network, no cost).
 
 ## Architecture
 
