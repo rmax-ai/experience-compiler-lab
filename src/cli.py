@@ -10,6 +10,8 @@ import typer
 
 from agent.adapter import FakeModel, LlmAdapter
 from evals.policy import decide, decision_reason
+from experiments.compare import compare as compare_configs
+from experiments.compare import write_compare_report
 from experiments.evolution import evolve as evolve_loop
 from experiments.promote import (
     PromotionError,
@@ -335,6 +337,35 @@ def evolve(
 
 
 @app.command()
+def compare(
+    configs: str = typer.Option(
+        "baseline,trace2skill,memory,compiler",
+        "--configs",
+        help="comma-separated subset: baseline,trace2skill,memory,compiler",
+    ),
+    iterations: int = typer.Option(3, "--iterations", help="iterations per configuration"),
+    dev_limit: int = typer.Option(0, "--dev-limit", help="max dev scenarios (0 = all)"),
+    model: str | None = typer.Option(None, "--model", help="execution/learning model"),
+    seed: int = typer.Option(42, "--seed", help="base run seed"),
+    workflow: str = typer.Option("onboarding", "--workflow", help="skill workflow directory"),
+) -> None:
+    """Compare M5 ablations and write a held-out report plus CSV."""
+    selected = [item.strip() for item in configs.split(",") if item.strip()]
+    if not selected:
+        raise typer.BadParameter("configs must contain at least one configuration")
+    model_name = _resolve_model_name(model)
+    results = compare_configs(
+        selected, workflow, iterations, _compare_model_factory(model_name), seed, dev_limit
+    )
+    write_compare_report(results, seed)
+    for result in results:
+        typer.echo(
+            f"config={result.config} heldout={result.heldout_success_rate:.2%} "
+            f"skill_v{result.skill_version} decisions={result.decisions}"
+        )
+
+
+@app.command()
 def report(
     path: str = typer.Option(
         "results/reports/iteration-report.md", "--path", help="report file to print"
@@ -547,6 +578,35 @@ def _proposer_model_factory(model_name: str) -> Callable[[], LlmAdapter | FakeMo
         return LlmAdapter(base_url=base_url, api_key=api_key, model=model_name, temperature=0.0)
 
     return factory
+
+
+def _compare_model_factory(model_name: str) -> ModelFactory:
+    """Route the deterministic fake's execution, mining and proposal scripts.
+
+    A real adapter needs no routing: its prompt determines the task.  The
+    fixture-backed fake has separate deterministic scripts for each role.
+    """
+    if model_name != "fake" and os.environ.get("EXP_LLM_API_KEY"):
+        return _model_factory(model_name)
+
+    class CompareFakeModel:
+        model = model_name
+        temperature = 0.0
+
+        def __init__(self) -> None:
+            self._execution = _model_factory(model_name)()
+
+        def complete(
+            self, messages: list[dict], tools: list[dict] | None = None, max_tokens: int = 1024
+        ):  # noqa: ANN201
+            system = str(messages[0].get("content", "")) if messages else ""
+            if "You are an evidence miner" in system:
+                return _miner_model_factory(model_name)().complete(messages, tools, max_tokens)
+            if "You improve a procedural skill" in system:
+                return _proposer_model_factory(model_name)().complete(messages, tools, max_tokens)
+            return self._execution.complete(messages, tools, max_tokens)
+
+    return CompareFakeModel
 
 
 if __name__ == "__main__":

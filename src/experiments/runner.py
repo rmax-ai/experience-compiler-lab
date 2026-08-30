@@ -30,6 +30,8 @@ def run_tasks(
     seed: int,
     experiment_id: str,
     store: TraceStore | None = None,
+    persist: bool = True,
+    memory_notes: list[str] | None = None,
 ) -> list[Trace]:
     """Run every scenario and append the graded traces to the store.
 
@@ -58,7 +60,11 @@ def run_tasks(
             seed=task_seed,
         )
 
-        context = build_context(scenario, workflow=workflow)
+        context = (
+            build_context(scenario, workflow=workflow)
+            if memory_notes is None
+            else build_context(scenario, workflow=workflow, memory_notes=memory_notes)
+        )
         trace = executor.run(
             task=scenario,
             context=context,
@@ -69,7 +75,8 @@ def run_tasks(
         )
 
         trace.outcome = _grade(world, scenario, trace)
-        store.append(trace)
+        if persist:
+            store.append(trace)
         traces.append(trace)
     return traces
 
