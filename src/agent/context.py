@@ -1,8 +1,9 @@
 """Execution-time context assembly (PYTHON_ARCHITECTURE.md "Context assembly").
 
-The context handed to the executor contains exactly four inputs: system
-instructions, the active skill markdown, the task description, and the tool
-schemas. It intentionally carries no knowledge content — the H3 mechanism.
+The context handed to the executor contains system instructions, the active
+skill markdown, the task description, and the tool schemas. Memory notes are
+included only for the explicit memory ablation configuration; all normal
+execution contexts intentionally carry no knowledge content — the H3 mechanism.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ def build_context(
     task: Scenario,
     workflow: str = "onboarding",
     skill_loader: Callable[[str], str] | None = None,
+    memory_notes: list[str] | None = None,
 ) -> ExecutionContext:
     """Assemble the executor context for one task.
 
@@ -40,8 +42,13 @@ def build_context(
     come from ``world.TOOL_SCHEMAS`` — all 8 schemas, no implementation hints.
     """
     loader = skill_loader or load_skill
+    system = SYSTEM_INSTRUCTIONS
+    if memory_notes is not None:
+        system = "\n".join(
+            [system, "", "## Memory notes", *(f"- {note}" for note in memory_notes)]
+        )
     return ExecutionContext(
-        system=SYSTEM_INSTRUCTIONS,
+        system=system,
         skill=loader(workflow),
         task=task.description,
         tools=[dict(schema) for schema in TOOL_SCHEMAS],
