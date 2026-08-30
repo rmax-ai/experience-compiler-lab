@@ -9,7 +9,17 @@ from typing import Any
 import typer
 
 from agent.adapter import FakeModel, LlmAdapter
+from evals.policy import decide, decision_reason
+from experiments.evolution import evolve as evolve_loop
+from experiments.promote import (
+    PromotionError,
+    evaluate_candidate_record,
+)
+from experiments.promote import (
+    promote as promote_candidate,
+)
 from experiments.proposal_store import ProposalStore
+from experiments.report import write_iteration_report
 from experiments.runner import ModelFactory, run_tasks
 from knowledge.miner import merge as merge_evidence
 from knowledge.miner import mine as mine_evidence
@@ -196,6 +206,148 @@ def patterns() -> None:
             f"{record.id} {record.status} support={record.statistics.support} "
             f"confidence={record.confidence:.2f}"
         )
+
+
+@app.command(name="eval")
+def eval_command(
+    candidate_id: str = typer.Argument(..., help="candidate id (candidate-<NN>)"),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        help="model name (default: fake unless EXP_LLM_API_KEY is set)",
+    ),
+    seed: int = typer.Option(42, "--seed", help="base run seed"),
+    allowed_regressions: int = typer.Option(
+        0, "--allowed-regressions", help="max tolerated regressions"
+    ),
+) -> None:
+    """Evaluate a candidate against the fixed validation split and record it.
+
+    Baseline (deployed skill) and candidate run the SAME scenarios with the
+    SAME per-task seeds. Writes the evaluation fields into the candidate's
+    record.yaml and prints the decision preview; the held-out test split is
+    never touched.
+    """
+    model_name = _resolve_model_name(model)
+    try:
+        result = evaluate_candidate_record(
+            candidate_id, model_factory=_model_factory(model_name), seed=seed
+        )
+    except FileNotFoundError:
+        typer.echo(f"candidate not found: {candidate_id}", err=True)
+        raise typer.Exit(1) from None
+    typer.echo(f"baseline_success_rate: {result.baseline_success_rate:.4f}")
+    typer.echo(f"candidate_success_rate: {result.candidate_success_rate:.4f}")
+    if result.regressions:
+        typer.echo(f"regressions: {len(result.regressions)} ({', '.join(result.regressions)})")
+    else:
+        typer.echo("regressions: 0")
+    for key, value in result.score_vector_delta.items():
+        typer.echo(f"delta_{key}: {value}")
+    accepted = decide(result, allowed_regressions)
+    typer.echo(f"decision preview: {'would accept' if accepted else 'would reject'}")
+    typer.echo(f"reason: {decision_reason(result, allowed_regressions)}")
+
+
+@app.command(name="promote")
+def promote_command(
+    candidate_id: str = typer.Argument(..., help="candidate id (candidate-<NN>)"),
+    allowed_regressions: int = typer.Option(
+        0, "--allowed-regressions", help="max tolerated regressions"
+    ),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        help="model name (default: fake unless EXP_LLM_API_KEY is set)",
+    ),
+    seed: int = typer.Option(42, "--seed", help="base run seed (used if eval is missing)"),
+) -> None:
+    """Apply the promotion policy to a candidate; only accept mutates skills/.
+
+    If the candidate has not been evaluated yet, the evaluation runs first
+    (no separate `exp eval` call required). The decision is recorded in
+    record.yaml, results/proposals/<id>.yaml and the append-only ledger.
+    """
+    model_name = _resolve_model_name(model)
+    try:
+        record = ProposalStore().load_candidate(candidate_id)["record"]
+    except FileNotFoundError:
+        typer.echo(f"candidate not found: {candidate_id}", err=True)
+        raise typer.Exit(1) from None
+    evaluation = record.get("evaluation") or {}
+    if evaluation.get("previous_score") is None or evaluation.get("candidate_score") is None:
+        evaluate_candidate_record(
+            candidate_id, model_factory=_model_factory(model_name), seed=seed
+        )
+    try:
+        outcome = promote_candidate(candidate_id, allowed_regressions=allowed_regressions)
+    except PromotionError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from None
+    typer.echo(f"decision: {outcome.decision}")
+    typer.echo(f"baseline_success_rate: {outcome.eval_result.baseline_success_rate:.4f}")
+    typer.echo(f"candidate_success_rate: {outcome.eval_result.candidate_success_rate:.4f}")
+    typer.echo(
+        "skills/: updated" if outcome.decision == "accepted" else "skills/: unchanged"
+    )
+
+
+@app.command()
+def evolve(
+    iterations: int = typer.Option(5, "--iterations", help="evolution iterations"),
+    dev_limit: int = typer.Option(
+        0, "--dev-limit", help="max dev scenarios per iteration (0 = all)"
+    ),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        help="model name (default: fake unless EXP_LLM_API_KEY is set)",
+    ),
+    seed: int = typer.Option(42, "--seed", help="base run seed"),
+    workflow: str = typer.Option("onboarding", "--workflow", help="skill workflow directory"),
+) -> None:
+    """Run the evolution loop: dev runs -> mine -> propose -> evaluate -> promote."""
+    model_name = _resolve_model_name(model)
+    result = evolve_loop(
+        workflow=workflow,
+        iterations=iterations,
+        model_factory=_model_factory(model_name),
+        seed=seed,
+        dev_limit=dev_limit,
+        miner_model_factory=_miner_model_factory(model_name),
+        proposer_model_factory=_proposer_model_factory(model_name),
+    )
+    reports_dir = REPO_ROOT / "results" / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    report_path = reports_dir / "iteration-report.md"
+    if report_path.exists():
+        report_path = reports_dir / f"iteration-{seed}.md"
+    write_iteration_report(result, str(report_path))
+    for iteration in result.iterations:
+        typer.echo(
+            f"iteration {iteration.iteration}: runs={iteration.runs_created} "
+            f"success={iteration.runs_succeeded} "
+            f"new_records={len(iteration.new_record_ids)} "
+            f"candidate={iteration.candidate_id or '-'} "
+            f"decision={iteration.decision or '-'}"
+        )
+    typer.echo(f"report: {report_path}")
+
+
+@app.command()
+def report(
+    path: str = typer.Option(
+        "results/reports/iteration-report.md", "--path", help="report file to print"
+    ),
+) -> None:
+    """Print the path of the latest iteration report."""
+    resolved = Path(path)
+    if not resolved.is_absolute():
+        resolved = REPO_ROOT / resolved
+    if not resolved.exists():
+        typer.echo(f"report not found: {resolved}", err=True)
+        raise typer.Exit(1)
+    typer.echo(str(resolved))
 
 
 def _inspect_run(run_id: str) -> None:
