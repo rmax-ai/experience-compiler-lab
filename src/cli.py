@@ -13,6 +13,11 @@ from evals.policy import decide, decision_reason
 from experiments.compare import compare as compare_configs
 from experiments.compare import write_compare_report
 from experiments.evolution import evolve as evolve_loop
+from experiments.matrix import (
+    run_transfer_matrix,
+    write_transfer_matrix_csv,
+    write_transfer_matrix_report,
+)
 from experiments.promote import (
     PromotionError,
     evaluate_candidate_record,
@@ -366,6 +371,44 @@ def compare(
 
 
 @app.command()
+def matrix(
+    models: str = typer.Option(
+        ...,
+        "--models",
+        help="comma-separated model names (e.g. fake,gpt-x); each is trained and executed",
+    ),
+    iterations: int = typer.Option(2, "--iterations", help="evolution iterations per source"),
+    seed: int = typer.Option(42, "--seed", help="base run seed"),
+    dev_limit: int | None = typer.Option(
+        None, "--dev-limit", help="max dev scenarios per iteration (default: all)"
+    ),
+    workflow: str = typer.Option("onboarding", "--workflow", help="skill workflow directory"),
+) -> None:
+    """Cross-model transfer matrix: train one skill per model, run every skill on every model."""
+    selected = [item.strip() for item in models.split(",") if item.strip()]
+    if not selected:
+        raise typer.BadParameter("models must contain at least one model name")
+    result = run_transfer_matrix(
+        selected, workflow, iterations, _matrix_model_factory, seed, dev_limit
+    )
+    results_dir = REPO_ROOT / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = write_transfer_matrix_csv(result, results_dir / "transfer-matrix.csv")
+    md_path = write_transfer_matrix_report(
+        result, results_dir / "transfer-matrix.md", iterations=iterations
+    )
+    for cell in result.cells:
+        typer.echo(
+            f"{cell.skill_source}->{cell.executor_model} "
+            f"heldout={cell.heldout_success_rate:.2%} "
+            f"skill_v{cell.skill_version} decisions={','.join(cell.decisions) or '-'} "
+            f"cost={cell.cost_usd:.6f}"
+        )
+    typer.echo(f"csv: {csv_path}")
+    typer.echo(f"md: {md_path}")
+
+
+@app.command()
 def report(
     path: str = typer.Option(
         "results/reports/iteration-report.md", "--path", help="report file to print"
@@ -578,6 +621,18 @@ def _proposer_model_factory(model_name: str) -> Callable[[], LlmAdapter | FakeMo
         return LlmAdapter(base_url=base_url, api_key=api_key, model=model_name, temperature=0.0)
 
     return factory
+
+
+def _matrix_model_factory(model_name: str) -> ModelFactory:
+    """Per-model factory for the transfer matrix.
+
+    Live adapter when an API key is configured and the model is not the fake;
+    otherwise the deterministic role-routing fake (execution, mining and
+    proposal scripts served by prompt sniffing).
+    """
+    if model_name != "fake" and os.environ.get("EXP_LLM_API_KEY"):
+        return _model_factory(model_name)
+    return _compare_model_factory(model_name)
 
 
 def _compare_model_factory(model_name: str) -> ModelFactory:
