@@ -1,0 +1,12 @@
+format_version: 1
+record_count: 1
+records:
+- claim_type: procedure
+  confidence: 0.38823529411764707
+  failures: 51
+  id: look-up-the-employee-record-before-granting-access
+  status: active
+  support: 32
+  workflows:
+  - onboarding
+

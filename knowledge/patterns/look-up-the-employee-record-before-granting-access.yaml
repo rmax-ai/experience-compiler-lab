@@ -1,0 +1,104 @@
+claim:
+  text: Look up the employee record before granting access
+  type: procedure
+confidence: 0.38823529411764707
+evidence:
+  counterexamples:
+  - run_036
+  - run_037
+  - run_038
+  - run_040
+  - run_042
+  - run_045
+  - run_046
+  - run_047
+  - run_048
+  - run_049
+  - run_051
+  - run_052
+  - run_053
+  - run_054
+  - run_056
+  - run_057
+  - run_062
+  - run_086
+  - run_087
+  - run_088
+  - run_090
+  - run_092
+  - run_095
+  - run_096
+  - run_097
+  - run_098
+  - run_099
+  - run_101
+  - run_102
+  - run_103
+  - run_104
+  - run_106
+  - run_107
+  - run_112
+  - run_376
+  - run_377
+  - run_378
+  - run_380
+  - run_382
+  - run_385
+  - run_386
+  - run_387
+  - run_388
+  - run_389
+  - run_391
+  - run_392
+  - run_393
+  - run_394
+  - run_396
+  - run_397
+  - run_402
+  supporting_runs:
+  - run_001
+  - run_004
+  - run_007
+  - run_010
+  - run_033
+  - run_039
+  - run_041
+  - run_043
+  - run_050
+  - run_055
+  - run_058
+  - run_059
+  - run_083
+  - run_089
+  - run_091
+  - run_093
+  - run_100
+  - run_105
+  - run_108
+  - run_109
+  - run_243
+  - run_255
+  - run_329
+  - run_341
+  - run_373
+  - run_379
+  - run_381
+  - run_383
+  - run_390
+  - run_395
+  - run_398
+  - run_399
+first_seen: '2026-08-29'
+format_version: 1
+id: look-up-the-employee-record-before-granting-access
+last_updated: '2026-08-30'
+scope:
+  workflows:
+  - onboarding
+statistics:
+  failures: 51
+  support: 32
+status: active
+superseded_by: null
+supersedes: null
+

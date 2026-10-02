@@ -1,0 +1,23 @@
+candidate_id: candidate-13
+decided_at: '2026-08-30T21:18:27.856648+00:00'
+decision: rejected
+diff_file: results/candidates/candidate-13/patch.md
+evaluation:
+  candidate_score: 0.2
+  previous_score: 0.2
+  regressions: 0
+  score_vector:
+    cost_usd_delta: 0.0
+    latency_s_delta: 0.0
+    tokens_delta: 0.0
+    tool_calls_delta: 0.0
+    trajectory_length_delta: 0.0
+evidence_refs:
+- look-up-the-employee-record-before-granting-access
+format_version: 1
+from_version: '1'
+proposed_by:
+  model: fake
+skill: onboarding
+to_version: '2'
+

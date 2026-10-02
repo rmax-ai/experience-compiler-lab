@@ -1,0 +1,16 @@
+candidate_id: candidate-02
+decided_at: null
+decision: pending
+diff_file: results/candidates/candidate-02/patch.md
+evaluation:
+  candidate_score: null
+  previous_score: null
+evidence_refs:
+- look-up-the-employee-record-before-granting-access
+format_version: 1
+from_version: '1'
+proposed_by:
+  model: fake
+skill: onboarding
+to_version: '2'
+
